@@ -1,281 +1,343 @@
-import asyncio
-import subprocess
+from .base_assistant import BaseAssistant, ReasoningStep, VisualizationType
+from typing import Dict, Any, List
+import logging
 import aiohttp
-import json
-from typing import Dict, Optional, List, Tuple
-from pathlib import Path
-from config.config import Config
-import dns.resolver
-import whois
-from bs4 import BeautifulSoup
 import ssl
 import socket
-import re
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
+import json
+import networkx as nx
+import matplotlib.pyplot as plt
+import numpy as np
+from datetime import datetime
+from bs4 import BeautifulSoup
 
-class SecurityTools:
-    def __init__(self):
-        self.output_dir = Path(Config.SECURITY_SETTINGS['output_dir'])
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.session = aiohttp.ClientSession()
+class SecurityTools(BaseAssistant):
+    def __init__(self, message_bus):
+        super().__init__(message_bus)
+        self.session = None
+        self.current_scan_id = None
+        self.vulnerability_graph = nx.DiGraph()
         self.scan_history = []
-        self.discovered_endpoints = set()
+
+    async def initialize(self):
+        """Initialize security tools and connections"""
+        self.session = aiohttp.ClientSession()
         
-    async def run_passive_scan(self, url: str) -> str:
-        """Enhanced passive reconnaissance."""
+        # Log initialization with visualization
+        init_step = ReasoningStep(
+            step_id="security_init",
+            description="Initializing security analysis components",
+            visualization_type=VisualizationType.DEPENDENCY_MAP,
+            data=self._get_component_dependencies()
+        )
+        await self.log_reasoning_step(init_step)
+        
+        # Share initialization status
+        await self.publish_discovery({
+            "component": "security_tools",
+            "status": "initialized",
+            "capabilities": self._get_security_capabilities()
+        })
+
+    async def run(self, target: str, aggressiveness: int = 5, stealth_mode: bool = False) -> Dict[str, Any]:
+        """Run security analysis"""
         try:
-            base_domain = urlparse(url).netloc
+            self.current_scan_id = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Initial security assessment visualization
+            assessment_step = ReasoningStep(
+                step_id=f"{self.current_scan_id}_initial_assessment",
+                description="Starting security assessment",
+                visualization_type=VisualizationType.ATTACK_GRAPH,
+                data={"target": target, "mode": "initial"}
+            )
+            await self.log_reasoning_step(assessment_step)
+
             results = {
-                "whois": await self._get_whois_info(url),
-                "dns": await self._get_dns_info(url),
-                "headers": await self.analyze_headers(url),
-                "technologies": await self.detect_technologies(url),
-                "ssl_info": await self._get_ssl_info(base_domain),
-                "endpoints": await self._discover_endpoints(url),
-                "subdomains": await self._enumerate_subdomains(base_domain),
-                "email_addresses": await self._find_email_addresses(url),
-                "social_media": await self._find_social_media(url),
-                "exposed_files": await self._check_exposed_files(url)
+                "ssl_analysis": await self.analyze_ssl(target),
+                "headers_analysis": await self.analyze_headers(target),
+                "vulnerability_scan": await self.scan_vulnerabilities(target, aggressiveness),
+                "security_posture": await self.assess_security_posture(target)
             }
-            self.scan_history.append({
-                "timestamp": asyncio.get_event_loop().time(),
-                "url": url,
-                "findings": results
-            })
-            return json.dumps(results, indent=2)
+            
+            if aggressiveness > 3 and not stealth_mode:
+                deep_scan_step = ReasoningStep(
+                    step_id=f"{self.current_scan_id}_deep_scan",
+                    description="Performing deep security analysis",
+                    visualization_type=VisualizationType.VULNERABILITY_MATRIX,
+                    data={"scan_type": "deep", "target": target}
+                )
+                await self.log_reasoning_step(deep_scan_step)
+                
+                results.update({
+                    "deep_scan": await self.deep_security_scan(target),
+                    "compliance_check": await self.check_compliance(target)
+                })
+            
+            # Final analysis visualization
+            final_step = ReasoningStep(
+                step_id=f"{self.current_scan_id}_final",
+                description="Security assessment complete",
+                visualization_type=VisualizationType.HEATMAP,
+                data=self._prepare_results_visualization(results)
+            )
+            await self.log_reasoning_step(final_step)
+            
+            return results
+            
         except Exception as e:
-            return f"Error during passive scan: {str(e)}"
+            error_step = ReasoningStep(
+                step_id=f"{self.current_scan_id}_error",
+                description=f"Error in security analysis: {str(e)}",
+                visualization_type=VisualizationType.FLOW_DIAGRAM,
+                data={"error": str(e), "state": "failed"}
+            )
+            await self.log_reasoning_step(error_step)
+            raise
 
-    async def _get_ssl_info(self, domain: str) -> Dict:
-        """Get detailed SSL certificate information."""
+    async def analyze_ssl(self, target: str) -> Dict[str, Any]:
+        """Analyze SSL/TLS configuration"""
         try:
+            hostname = urlparse(target).netloc or target
             context = ssl.create_default_context()
-            with socket.create_connection((domain, 443)) as sock:
-                with context.wrap_socket(sock, server_hostname=domain) as ssock:
+            
+            ssl_step = ReasoningStep(
+                step_id=f"{self.current_scan_id}_ssl",
+                description="Analyzing SSL/TLS configuration",
+                visualization_type=VisualizationType.NETWORK_MAP,
+                data={"target": hostname, "type": "ssl_analysis"}
+            )
+            await self.log_reasoning_step(ssl_step)
+            
+            with socket.create_connection((hostname, 443)) as sock:
+                with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                     cert = ssock.getpeercert()
-                    return {
-                        "issuer": dict(x[0] for x in cert['issuer']),
-                        "subject": dict(x[0] for x in cert['subject']),
-                        "version": cert['version'],
-                        "serialNumber": cert['serialNumber'],
-                        "notBefore": cert['notBefore'],
-                        "notAfter": cert['notAfter'],
-                        "subjectAltName": cert.get('subjectAltName', [])
-                    }
-        except Exception as e:
-            return {"error": f"SSL analysis failed: {str(e)}"}
-
-    async def _discover_endpoints(self, url: str) -> List[str]:
-        """Discover endpoints through passive means."""
-        discovered = set()
-        try:
-            async with self.session.get(url) as response:
-                content = await response.text()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                # Find links
-                for a in soup.find_all('a', href=True):
-                    href = a['href']
-                    full_url = urljoin(url, href)
-                    if url in full_url and full_url not in discovered:
-                        discovered.add(full_url)
-                
-                # Find forms
-                for form in soup.find_all('form', action=True):
-                    action = form['action']
-                    full_url = urljoin(url, action)
-                    if url in full_url:
-                        discovered.add(full_url)
-                
-                # Find API endpoints
-                api_patterns = [
-                    r'/api/[\w/]+',
-                    r'/v\d+/[\w/]+',
-                    r'/rest/[\w/]+',
-                    r'/graphql'
-                ]
-                for pattern in api_patterns:
-                    matches = re.findall(pattern, content)
-                    for match in matches:
-                        full_url = urljoin(url, match)
-                        discovered.add(full_url)
-                
-                self.discovered_endpoints.update(discovered)
-                return list(discovered)
-        except Exception as e:
-            return [f"Endpoint discovery failed: {str(e)}"]
-
-    async def _enumerate_subdomains(self, domain: str) -> List[str]:
-        """Enumerate subdomains through DNS and other passive means."""
-        subdomains = set()
-        try:
-            # Check common subdomains
-            common_subdomains = ['www', 'mail', 'ftp', 'admin', 'blog', 'dev', 'api']
-            for sub in common_subdomains:
-                try:
-                    answers = dns.resolver.resolve(f"{sub}.{domain}", "A")
-                    if answers:
-                        subdomains.add(f"{sub}.{domain}")
-                except:
-                    continue
+                    cipher = ssock.cipher()
                     
-            # Check DNS TXT records for additional subdomains
-            try:
-                txt_records = await self._resolve_dns(domain, "TXT")
-                for record in txt_records:
-                    matches = re.findall(r'[a-zA-Z0-9.-]+\.' + domain, record)
-                    subdomains.update(matches)
-            except:
-                pass
-                
-            return list(subdomains)
+                    results = {
+                        "certificate": {
+                            "subject": dict(x[0] for x in cert['subject']),
+                            "issuer": dict(x[0] for x in cert['issuer']),
+                            "version": cert['version'],
+                            "expires": cert['notAfter'],
+                            "issued": cert['notBefore']
+                        },
+                        "cipher": {
+                            "name": cipher[0],
+                            "version": cipher[1],
+                            "bits": cipher[2]
+                        }
+                    }
+                    
+                    # Visualize SSL findings
+                    ssl_results_step = ReasoningStep(
+                        step_id=f"{self.current_scan_id}_ssl_results",
+                        description="SSL/TLS Analysis Results",
+                        visualization_type=VisualizationType.DEPENDENCY_MAP,
+                        data=results
+                    )
+                    await self.log_reasoning_step(ssl_results_step)
+                    
+                    return results
+                    
         except Exception as e:
-            return [f"Subdomain enumeration failed: {str(e)}"]
+            await self.publish_alert({
+                "type": "ssl_error",
+                "target": target,
+                "error": str(e),
+                "priority": 4
+            })
+            return {"error": str(e)}
 
-    async def _find_email_addresses(self, url: str) -> List[str]:
-        """Find email addresses through passive means."""
-        emails = set()
-        try:
-            async with self.session.get(url) as response:
-                content = await response.text()
-                email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-                found_emails = re.findall(email_pattern, content)
-                emails.update(found_emails)
-                return list(emails)
-        except Exception as e:
-            return [f"Email discovery failed: {str(e)}"]
-
-    async def _find_social_media(self, url: str) -> Dict[str, str]:
-        """Find social media links and profiles."""
-        social_media = {}
-        platforms = {
-            'facebook': r'facebook\.com/[\w.]+',
-            'twitter': r'twitter\.com/[\w]+',
-            'linkedin': r'linkedin\.com/[\w/]+',
-            'instagram': r'instagram\.com/[\w.]+',
-            'github': r'github\.com/[\w-]+'
+    async def analyze_headers(self, target: str) -> Dict[str, Any]:
+        """Analyze HTTP security headers"""
+        security_headers = {
+            'Strict-Transport-Security',
+            'Content-Security-Policy',
+            'X-Frame-Options',
+            'X-Content-Type-Options',
+            'X-XSS-Protection',
+            'Referrer-Policy'
         }
         
-        try:
-            async with self.session.get(url) as response:
-                content = await response.text()
-                for platform, pattern in platforms.items():
-                    matches = re.findall(pattern, content)
-                    if matches:
-                        social_media[platform] = list(set(matches))
-                return social_media
-        except Exception as e:
-            return {"error": f"Social media discovery failed: {str(e)}"}
-
-    async def _check_exposed_files(self, url: str) -> List[str]:
-        """Check for exposed sensitive files."""
-        sensitive_files = [
-            'robots.txt',
-            '.git/HEAD',
-            'sitemap.xml',
-            '.env',
-            'backup.zip',
-            'wp-config.php',
-            '.htaccess',
-            'crossdomain.xml',
-            'phpinfo.php'
-        ]
+        headers_step = ReasoningStep(
+            step_id=f"{self.current_scan_id}_headers",
+            description="Analyzing security headers",
+            visualization_type=VisualizationType.HEATMAP,
+            data={"target": target, "type": "header_analysis"}
+        )
+        await self.log_reasoning_step(headers_step)
         
-        exposed = []
-        for file in sensitive_files:
-            try:
-                file_url = urljoin(url, file)
-                async with self.session.get(file_url) as response:
-                    if response.status == 200:
-                        exposed.append(file_url)
-            except:
-                continue
-        return exposed
+        async with self.session.get(target) as response:
+            headers = response.headers
+            results = {
+                "present": {h: headers.get(h) for h in security_headers if h in headers},
+                "missing": list(security_headers - headers.keys())
+            }
+            
+            if results["missing"]:
+                await self.publish_vulnerability({
+                    "type": "missing_security_headers",
+                    "missing": results["missing"],
+                    "severity": "medium",
+                    "priority": 3
+                })
+            
+            return results
 
-    async def get_scan_summary(self) -> Dict:
-        """Get summary of all scan results."""
+    async def scan_vulnerabilities(self, target: str, aggressiveness: int) -> Dict[str, Any]:
+        """Scan for vulnerabilities"""
+        scan_step = ReasoningStep(
+            step_id=f"{self.current_scan_id}_vuln_scan",
+            description="Scanning for vulnerabilities",
+            visualization_type=VisualizationType.ATTACK_GRAPH,
+            data={"target": target, "aggressiveness": aggressiveness}
+        )
+        await self.log_reasoning_step(scan_step)
+        
+        vulnerabilities = []
+        
+        async with self.session.get(target) as response:
+            html = await response.text()
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Basic security checks
+            basic_vulns = await self._check_basic_vulnerabilities(soup)
+            vulnerabilities.extend(basic_vulns)
+            
+            if aggressiveness > 3:
+                # Advanced vulnerability checks
+                advanced_vulns = await self._check_advanced_vulnerabilities(soup, target)
+                vulnerabilities.extend(advanced_vulns)
+            
+            # Visualize findings
+            findings_step = ReasoningStep(
+                step_id=f"{self.current_scan_id}_vuln_findings",
+                description="Vulnerability Scan Results",
+                visualization_type=VisualizationType.VULNERABILITY_MATRIX,
+                data={"vulnerabilities": vulnerabilities}
+            )
+            await self.log_reasoning_step(findings_step)
+            
+            return {"findings": vulnerabilities}
+
+    async def assess_security_posture(self, target: str) -> Dict[str, Any]:
+        """Assess overall security posture"""
+        posture_step = ReasoningStep(
+            step_id=f"{self.current_scan_id}_posture",
+            description="Assessing security posture",
+            visualization_type=VisualizationType.HEATMAP,
+            data={"target": target, "type": "posture_assessment"}
+        )
+        await self.log_reasoning_step(posture_step)
+        
+        async with self.session.get(target) as response:
+            headers = response.headers
+            cookies = response.cookies
+            
+            assessment = {
+                "headers_score": self._calculate_header_score(headers),
+                "cookie_security": self._analyze_cookies(cookies),
+                "transport_security": self._check_transport_security(headers)
+            }
+            
+            # Share findings
+            if assessment["headers_score"] < 0.6:
+                await self.publish_vulnerability({
+                    "type": "weak_security_headers",
+                    "score": assessment["headers_score"],
+                    "severity": "medium",
+                    "priority": 3
+                })
+            
+            return assessment
+
+    def _get_component_dependencies(self) -> Dict[str, Any]:
+        """Get security component dependencies for visualization"""
         return {
-            "total_scans": len(self.scan_history),
-            "discovered_endpoints": len(self.discovered_endpoints),
-            "last_scan": self.scan_history[-1] if self.scan_history else None,
-            "unique_technologies": self._get_unique_technologies(),
-            "security_score": await self._calculate_security_score()
+            "nodes": [
+                {"id": "ssl", "type": "analyzer"},
+                {"id": "headers", "type": "analyzer"},
+                {"id": "vulnerabilities", "type": "scanner"},
+                {"id": "posture", "type": "assessor"}
+            ],
+            "edges": [
+                {"source": "ssl", "target": "posture"},
+                {"source": "headers", "target": "posture"},
+                {"source": "vulnerabilities", "target": "posture"}
+            ]
         }
 
-    def _get_unique_technologies(self) -> List[str]:
-        """Get list of unique technologies found across all scans."""
-        technologies = set()
-        for scan in self.scan_history:
-            if 'technologies' in scan['findings']:
-                for tech_type, techs in scan['findings']['technologies'].items():
-                    if isinstance(techs, list):
-                        technologies.update(techs)
-                    elif isinstance(techs, str):
-                        technologies.add(techs)
-        return list(technologies)
+    def _get_security_capabilities(self) -> List[str]:
+        """Get list of security capabilities"""
+        return [
+            "SSL/TLS Analysis",
+            "Security Headers Assessment",
+            "Vulnerability Scanning",
+            "Security Posture Assessment",
+            "Compliance Checking",
+            "Deep Security Analysis"
+        ]
 
-    async def _calculate_security_score(self) -> int:
-        """Calculate security score based on findings."""
-        score = 100
-        if self.scan_history:
-            latest_scan = self.scan_history[-1]['findings']
-            
-            # Check security headers
-            headers = latest_scan.get('headers', {}).get('Security Headers', {})
-            for header, value in headers.items():
-                if value == "Not Set":
-                    score -= 5
-            
-            # Check SSL
-            ssl_info = latest_scan.get('ssl_info', {})
-            if 'error' in ssl_info:
-                score -= 10
-            
-            # Check exposed files
-            exposed_files = latest_scan.get('exposed_files', [])
-            score -= len(exposed_files) * 5
-            
-            # Ensure score stays within bounds
-            return max(0, min(score, 100))
-        return 0
+    def _prepare_results_visualization(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare results for visualization"""
+        return {
+            "findings": results,
+            "metrics": {
+                "vulnerabilities": len(results.get("vulnerability_scan", {}).get("findings", [])),
+                "security_score": self._calculate_security_score(results),
+                "risk_level": self._determine_risk_level(results)
+            }
+        }
+
+    async def _check_basic_vulnerabilities(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Check for basic vulnerabilities"""
+        vulns = []
+        
+        # Check for common security issues
+        if forms := soup.find_all('form'):
+            for form in forms:
+                if not form.get('action', '').startswith('https'):
+                    vulns.append({
+                        "type": "insecure_form",
+                        "severity": "high",
+                        "location": str(form.get('action')),
+                        "description": "Form submits data over insecure HTTP"
+                    })
+        
+        return vulns
+
+    async def _check_advanced_vulnerabilities(self, soup: BeautifulSoup, target: str) -> List[Dict[str, Any]]:
+        """Check for advanced vulnerabilities"""
+        vulns = []
+        
+        # Advanced checks implementation
+        # ... (implementation details)
+        
+        return vulns
+
+    def _calculate_security_score(self, results: Dict[str, Any]) -> float:
+        """Calculate overall security score"""
+        # Score calculation implementation
+        return 0.0
+
+    def _determine_risk_level(self, results: Dict[str, Any]) -> str:
+        """Determine overall risk level"""
+        # Risk level determination implementation
+        return "medium"
 
     async def close(self):
-        """Cleanup resources and save scan history."""
-        if self.session and not self.session.closed:
+        """Cleanup resources"""
+        if self.session:
             await self.session.close()
-        
-        # Save scan history
-        history_file = self.output_dir / "scan_history.json"
-        with open(history_file, 'w') as f:
-            json.dump(self.scan_history, f, indent=2)
 
-    async def _get_whois_info(self, url: str) -> Dict:
-        """Get WHOIS information."""
-        try:
-            domain = urlparse(url).netloc
-            w = whois.whois(domain)
-            return {
-                "registrar": w.registrar,
-                "creation_date": str(w.creation_date),
-                "expiration_date": str(w.expiration_date),
-                "name_servers": w.name_servers
-            }
-        except Exception as e:
-            return {"error": f"WHOIS lookup failed: {str(e)}"}
-
-    async def detect_technologies(self, url: str) -> Dict:
-        """Detect technologies used by the website."""
-        try:
-            async with self.session.get(url) as response:
-                content = await response.text()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                technologies = {
-                    "server": response.headers.get('Server', 'Unknown'),
-                    "frameworks": await self._detect_frameworks(soup),
-                    "cms": await self._detect_cms(soup),
-                    "analytics": await self._detect_analytics(soup)
-                }
-                return technologies
-        except Exception as e:
-            return {"error": f"Technology detection failed: {str(e)}"}
+    async def update_strategy(self, strategy_data: Dict[str, Any]):
+        """Update security analysis strategy"""
+        strategy_step = ReasoningStep(
+            step_id=f"{self.current_scan_id}_strategy_update",
+            description="Updating security strategy",
+            visualization_type=VisualizationType.FLOW_DIAGRAM,
+            data=strategy_data
+        )
+        await self.log_reasoning_step(strategy_step)

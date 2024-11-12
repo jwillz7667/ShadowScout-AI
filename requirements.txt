@@ -30,3 +30,12 @@ pytest==7.4.3
 pytest-asyncio==0.21.1
 flake8==6.1.0
 black==23.11.0
+
+# GUI
+PyQt6>=6.4.0
+PyQt6-Qt6>=6.4.0
+PyQt6-sip>=13.4.0
+
+# Visualization and Graphs
+networkx==3.0
+matplotlib==3.7.1

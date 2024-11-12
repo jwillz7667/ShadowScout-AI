@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ShadowScout AI
+Comment=Advanced Neural-Powered Security Assessment System
+Exec=/path/to/your/venv/bin/python3 /path/to/main.py
+Icon=/path/to/docs/assets/images/logo.png
+Terminal=false
+Categories=Security;Network; 
