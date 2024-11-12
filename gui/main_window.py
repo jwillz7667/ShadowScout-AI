@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLineEdit, QTextEdit, QLabel, 
                             QProgressBar, QComboBox, QFrame, QTabWidget,
-                            QCheckBox, QSpinBox, QGroupBox, QScrollArea)
+                            QCheckBox, QSpinBox, QGroupBox, QScrollArea,
+                            QFormLayout)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QFont, QPalette, QColor
 import asyncio
@@ -350,6 +351,9 @@ class MainWindow(QMainWindow):
         # Initialize communications view
         self.communications_view = CommunicationsView()
         
+        # Initialize scan history
+        self.scan_history = []
+        
         # Subscribe to message bus
         self.message_bus.subscribe_all(self._handle_message)
         
@@ -373,8 +377,36 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.create_scan_tab(), "Active Scan")
         tabs.addTab(self.create_history_tab(), "Scan History")
         tabs.addTab(self.create_assistants_tab(), "Assistants")
-        tabs.addTab(self.communications_view, "Communications")  # Add communications view tab
+        tabs.addTab(self.communications_view, "Communications")
+        tabs.addTab(self.create_settings_tab(), "Settings")
         layout.addWidget(tabs)
+
+    def create_settings_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Offensive Tools Configuration
+        offensive_tools_group = QGroupBox("Offensive Tools Configuration")
+        offensive_tools_layout = QFormLayout(offensive_tools_group)
+        
+        # Example configuration options
+        self.xss_intensity = QSpinBox()
+        self.xss_intensity.setRange(1, 5)
+        self.xss_intensity.setValue(3)
+        offensive_tools_layout.addRow("XSS Intensity:", self.xss_intensity)
+        
+        self.sqli_intensity = QSpinBox()
+        self.sqli_intensity.setRange(1, 5)
+        self.sqli_intensity.setValue(3)
+        offensive_tools_layout.addRow("SQLi Intensity:", self.sqli_intensity)
+        
+        self.jwt_enabled = QCheckBox("Enable JWT Attacks")
+        self.jwt_enabled.setChecked(True)
+        offensive_tools_layout.addRow(self.jwt_enabled)
+        
+        layout.addWidget(offensive_tools_group)
+        
+        return widget
 
     def create_scan_tab(self):
         scan_widget = QWidget()
@@ -512,6 +544,7 @@ class MainWindow(QMainWindow):
         return frame
 
     def refresh_history_view(self):
+        """Refresh the scan history view"""
         # Clear existing items
         for i in reversed(range(self.history_layout.count())):
             self.history_layout.itemAt(i).widget().setParent(None)
@@ -522,8 +555,8 @@ class MainWindow(QMainWindow):
             self.history_layout.addWidget(widget)
 
     def clear_history(self):
+        """Clear the scan history"""
         self.scan_history.clear()
-        self.save_scan_history()
         self.refresh_history_view()
 
     def load_scan_history(self):
