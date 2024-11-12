@@ -1,0 +1,121 @@
+# Environment and configuration
+.env
+config/local_config.py
+*.pem
+*.key
+*.crt
+.env.*
+
+# Scan results and logs
+scan_results/
+logs/
+*.log
+report_*.json
+scan_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Security and sensitive files
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+*.keystore
+*.jks
+credentials.json
+token.json
+secrets.yaml
+*.secret
+*password*
+*credential*
+
+# Test coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.pyc
+
+# Packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip 
