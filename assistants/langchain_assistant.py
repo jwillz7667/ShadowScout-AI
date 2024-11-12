@@ -75,23 +75,6 @@ class LangchainAssistant:
         )
         self.chat_history = []
 
-    async def process_text(self, input_text: str) -> str:
-        try:
-            response = await self.agent_executor.ainvoke({
-                "input": input_text,
-                "chat_history": self.chat_history,
-                "agent_scratchpad": []
-            })
-            
-            self.chat_history.extend([
-                HumanMessage(content=input_text),
-                AIMessage(content=str(response["output"]))
-            ])
-            
-            return str(response["output"])
-        except Exception as e:
-            return f"Error processing text: {str(e)}"
-
     def _build_system_message(self) -> str:
         return """You are an advanced security assessment assistant with comprehensive capabilities.
 
@@ -110,3 +93,89 @@ Operational Guidelines:
 3. Gather comprehensive target information
 4. Document all findings thoroughly
 5. Provide detailed technical analysis"""
+
+    def _build_enhanced_system_message(self) -> str:
+        return """You are an elite AI-powered security assessment system with advanced capabilities.
+
+Primary Objectives:
+1. Maximum Information Gathering
+2. Deep Vulnerability Analysis
+3. Stealth Operation
+4. Adaptive Strategy Development
+
+Core Capabilities:
+- Advanced Web Analysis:
+  * DOM structure examination
+  * JavaScript analysis
+  * Hidden endpoint discovery
+  * Authentication flow analysis
+
+- Infrastructure Mapping:
+  * Service enumeration
+  * Version fingerprinting
+  * Architecture analysis
+  * Network topology mapping
+
+- Attack Surface Analysis:
+  * Input validation testing
+  * Authentication bypass potential
+  * Session management flaws
+  * Business logic vulnerabilities
+
+Operational Protocols:
+1. Start with passive reconnaissance
+2. Escalate to active scanning when safe
+3. Adapt to defensive measures
+4. Pivot through discovered vectors
+5. Chain multiple vulnerabilities
+6. Document all findings in detail
+
+When encountering resistance:
+1. Switch user agents
+2. Rotate IP addresses if needed
+3. Try alternative paths
+4. Use different protocol variations
+5. Attempt timing-based analysis
+
+Remember:
+- Chain discovered vulnerabilities for maximum impact
+- Look for interconnected systems
+- Document all potential entry points
+- Track all successful methods
+- Note defensive measures encountered"""
+
+    async def process_text(self, input_text: str) -> str:
+        try:
+            # Enhanced context for better targeting
+            enhanced_input = f"""
+Target Analysis Request:
+{input_text}
+
+Objectives:
+1. Identify all potential entry points
+2. Map the attack surface
+3. Find security misconfigurations
+4. Discover technology stack vulnerabilities
+5. Detect business logic flaws
+
+Consider:
+- Hidden functionality
+- Error handling behavior
+- Rate limiting implementation
+- Authentication mechanisms
+- Data validation patterns
+"""
+            response = await self.agent_executor.ainvoke({
+                "input": enhanced_input,
+                "chat_history": self.chat_history,
+                "agent_scratchpad": []
+            })
+            
+            self.chat_history.extend([
+                HumanMessage(content=input_text),
+                AIMessage(content=str(response["output"]))
+            ])
+            
+            return str(response["output"])
+        except Exception as e:
+            return f"Error processing text: {str(e)}"
