@@ -34,17 +34,36 @@ class ReasoningStep:
     alternatives: List[Dict[str, Any]] = None
 
 class BaseAssistant(ABC):
-    def __init__(self, message_bus: MessageBus):
+    def __init__(self, name: str, message_bus: MessageBus):
+        self.name = name
         self.message_bus = message_bus
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.reasoning_steps = []
-        self.visualization_history = []
-        self.collaboration_state = {}
+        self.message_bus.subscribe_all(self.handle_message)
+        
+    async def send_message(self, msg_type: MessageType, content: dict, priority: int = 1):
+        """Send a message to other assistants via the message bus"""
+        message = Message(
+            type=msg_type,
+            sender=self.name,
+            content=content,
+            priority=priority
+        )
+        await self.message_bus.publish(message)
     
     @abstractmethod
-    async def process_request(self, input_text: str) -> str:
+    async def handle_message(self, message: Message):
+        """Handle incoming messages from other assistants"""
         pass
-    
+
+    @abstractmethod
+    async def initialize(self):
+        """Initialize the assistant"""
+        pass
+
+    @abstractmethod
+    async def shutdown(self):
+        """Cleanup when shutting down"""
+        pass
+
     async def handle_error(self, error: Exception) -> str:
         self.logger.error(f"Error in {self.__class__.__name__}: {str(error)}")
         return f"An error occurred: {str(error)}" 
@@ -297,16 +316,6 @@ class BaseAssistant(ABC):
     def _create_alternative_approach(self, failed_step: ReasoningStep, context: Dict[str, Any]) -> ReasoningStep:
         """Create alternative approach based on analysis"""
         # Implementation in specific assistant classes
-        pass
-
-    @abstractmethod
-    async def initialize(self):
-        """Initialize the assistant"""
-        pass
-
-    @abstractmethod
-    async def close(self):
-        """Cleanup resources"""
         pass
 
     @abstractmethod

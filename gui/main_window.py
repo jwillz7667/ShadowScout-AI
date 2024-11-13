@@ -13,6 +13,10 @@ import json
 from pathlib import Path
 from assistants.message_bus import MessageType, Message, MessageBus
 from assistants.offensive_tools import OffensiveTools
+import html
+from assistants.browser_assistant import BrowserAssistant
+from assistants.terminal_assistant import TerminalAssistant
+from assistants.attack_strategist import AttackStrategist
 
 class OffensiveToolsConfig(QGroupBox):
     def __init__(self, parent=None):
@@ -88,57 +92,127 @@ class OffensiveToolsConfig(QGroupBox):
 class ScanWorker(QThread):
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
-    log = pyqtSignal(str)  # New signal for detailed logs
+    log = pyqtSignal(dict)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
 
-    def __init__(self, target_url, scan_type, assistant_config, offensive_config):
+    def __init__(self, target_url, scan_config, assistant_config, offensive_config):
         super().__init__()
         self.target_url = target_url
-        self.scan_type = scan_type
+        self.scan_config = scan_config
         self.assistant_config = assistant_config
         self.offensive_config = offensive_config
+        self.current_progress = 0
+        
+        # Initialize message bus
+        self.message_bus = MessageBus()
+        
+        # Initialize assistants
+        self.browser_assistant = BrowserAssistant(self.message_bus)
+        self.terminal_assistant = TerminalAssistant(self.message_bus)
+        self.attack_strategist = AttackStrategist(self.message_bus)
+        
+        # Subscribe to message bus for logging
+        self.message_bus.subscribe_all(self._handle_message)
+
+    async def _handle_message(self, message: Message):
+        """Handle messages from assistants"""
+        self.log.emit({
+            'type': message.type.value.upper(),
+            'source': message.sender,
+            'content': str(message.content)
+        })
 
     async def run_scan(self):
         try:
-            # Initialize tools
+            # Initialize components
+            self.log.emit({
+                'type': 'INFO',
+                'source': 'Scanner',
+                'content': 'Initializing scan environment...'
+            })
+            
+            # Initialize assistants
+            await self.browser_assistant.initialize()
+            await self.terminal_assistant.initialize()
+            await self.attack_strategist.initialize()
+            
+            # Initialize offensive tools with progress updates
             offensive_tools = OffensiveTools()
             await offensive_tools.initialize()
+            self.progress.emit(10)
             
-            self.log.emit("[*] Initializing scan environment...")
-            self.log.emit(f"[+] Target URL: {self.target_url}")
+            # Run browser analysis
+            self.log.emit({
+                'type': 'PROCESS',
+                'source': 'Browser Assistant',
+                'content': 'Starting browser security analysis...'
+            })
+            browser_results = await self.browser_assistant.run(
+                self.target_url,
+                self.scan_config.get('aggressiveness', 5),
+                self.scan_config.get('stealth_mode', False)
+            )
+            self.progress.emit(40)
             
-            results = {}
+            # Run terminal analysis
+            self.log.emit({
+                'type': 'PROCESS',
+                'source': 'Terminal Assistant',
+                'content': 'Starting system-level analysis...'
+            })
+            terminal_results = await self.terminal_assistant.run(
+                self.target_url,
+                self.scan_config.get('aggressiveness', 5),
+                self.scan_config.get('stealth_mode', False)
+            )
+            self.progress.emit(70)
             
-            # Run enabled offensive tools
-            for category, tools in self.offensive_config.items():
-                self.log.emit(f"\n[*] Running {category} tools...")
-                for tool_name, settings in tools.items():
-                    if settings['enabled']:
-                        self.log.emit(f"[+] Launching {tool_name} (Intensity: {settings['intensity']})")
-                        try:
-                            tool_results = await offensive_tools.run_tool(
-                                tool_name, 
-                                self.target_url, 
-                                settings['intensity']
-                            )
-                            results[tool_name] = tool_results
-                            self.log.emit(f"[+] {tool_name} completed successfully")
-                            self.log.emit(f"    └─ Found {len(tool_results.get('findings', []))} issues")
-                        except Exception as e:
-                            self.log.emit(f"[!] Error in {tool_name}: {str(e)}")
+            # Run attack strategy analysis
+            self.log.emit({
+                'type': 'PROCESS',
+                'source': 'Attack Strategist',
+                'content': 'Developing attack strategies...'
+            })
+            strategy_results = await self.attack_strategist.run(
+                self.target_url,
+                self.scan_config.get('aggressiveness', 5),
+                self.scan_config.get('stealth_mode', False)
+            )
+            self.progress.emit(90)
             
-            await offensive_tools.close()
+            # Combine results
+            results = {
+                'browser_analysis': browser_results,
+                'terminal_analysis': terminal_results,
+                'attack_strategy': strategy_results,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Cleanup
+            await self.browser_assistant.shutdown()
+            await self.terminal_assistant.shutdown()
+            await self.attack_strategist.shutdown()
+            
+            self.progress.emit(100)
             self.finished.emit(results)
             
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(f"Scan failed: {str(e)}")
+            self.log.emit({
+                'type': 'ERROR',
+                'source': 'Scanner',
+                'content': f'Critical error: {str(e)}'
+            })
 
     def run(self):
+        """QThread run method"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.run_scan())
-        loop.close()
+        try:
+            loop.run_until_complete(self.run_scan())
+        finally:
+            loop.close()
 
 class AssistantConfig(QGroupBox):
     def __init__(self, name, parent=None):
@@ -245,12 +319,12 @@ class CommunicationsView(QWidget):
         
         layout.addWidget(filter_frame)
         
-        # Communications display
+        # Communications display with fallback fonts
         self.comm_display = QTextEdit()
         self.comm_display.setReadOnly(True)
         self.comm_display.setStyleSheet("""
             QTextEdit {
-                font-family: 'Consolas', 'Courier New', monospace;
+                font-family: 'Consolas', 'Monaco', 'Menlo', 'DejaVu Sans Mono', 'Courier New', monospace;
                 font-size: 10pt;
                 line-height: 1.4;
                 background-color: #1e1e1e;
@@ -348,6 +422,11 @@ class MainWindow(QMainWindow):
         # Initialize message bus
         self.message_bus = MessageBus()
         
+        # Initialize assistants
+        self.browser_assistant = BrowserAssistant(self.message_bus)
+        self.terminal_assistant = TerminalAssistant(self.message_bus)
+        self.attack_strategist = AttackStrategist(self.message_bus)
+        
         # Initialize communications view
         self.communications_view = CommunicationsView()
         
@@ -358,6 +437,18 @@ class MainWindow(QMainWindow):
         self.message_bus.subscribe_all(self._handle_message)
         
         self.setup_ui()
+
+    async def initialize_assistants(self):
+        """Initialize all assistants"""
+        await self.browser_assistant.initialize()
+        await self.terminal_assistant.initialize()
+        await self.attack_strategist.initialize()
+
+    async def shutdown_assistants(self):
+        """Shutdown all assistants"""
+        await self.browser_assistant.shutdown()
+        await self.terminal_assistant.shutdown()
+        await self.attack_strategist.shutdown()
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -661,17 +752,37 @@ class MainWindow(QMainWindow):
         self.output_text.clear()
         self.progress_bar.setValue(0)
         
-        # Get both assistant and offensive tool configurations
+        # Create scan configuration dictionary
+        scan_config = {
+            'type': self.scan_type.currentText(),
+            'aggressiveness': 5,  # Default value
+            'stealth_mode': False
+        }
+        
+        # Get configurations
         assistant_configs = {name: config.get_config() 
-                           for name, config in self.assistant_configs.items()}
+                            for name, config in self.assistant_configs.items()}
         offensive_config = self.offensive_tools.get_config()
         
+        # Update scan config based on assistant configs
+        for config in assistant_configs.values():
+            if config.get('enabled', True):
+                scan_config['aggressiveness'] = max(scan_config['aggressiveness'], 
+                                                  config.get('aggressiveness', 5))
+                scan_config['stealth_mode'] = scan_config['stealth_mode'] or \
+                                            config.get('stealth_mode', False)
+        
+        # Initialize assistants before starting scan
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.initialize_assistants())
+        
         # Create and start worker thread
-        self.worker = ScanWorker(target_url, self.scan_type.currentText(),
+        self.worker = ScanWorker(target_url, scan_config,
                                 assistant_configs, offensive_config)
         self.worker.progress.connect(self.update_progress)
         self.worker.status.connect(self.update_status)
-        self.worker.log.connect(self.update_log)  # New connection for detailed logs
+        self.worker.log.connect(self.update_log)
         self.worker.finished.connect(self.scan_completed)
         self.worker.error.connect(self.scan_error)
         self.worker.start()
@@ -684,27 +795,35 @@ class MainWindow(QMainWindow):
         self.output_text.append(status)
 
     def scan_completed(self, results):
+        """Enhanced scan completion handler with better logging"""
         self.scan_button.setEnabled(True)
         self.status_label.setText("Scan completed")
         self.progress_bar.setValue(100)
         
-        # Create detailed output
-        output = "\n=== Scan Results ===\n"
-        output += f"Target: {self.url_input.text()}\n"
-        output += f"Scan Type: {self.scan_type.currentText()}\n"
-        output += f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        # Log completion header
+        self.update_log({
+            'type': 'SUCCESS',
+            'source': 'Scanner',
+            'content': f'Scan completed for {self.url_input.text()}'
+        })
         
-        # Add detailed results sections
-        for key, value in results.items():
-            output += f"=== {key.replace('_', ' ').title()} ===\n"
-            if isinstance(value, dict):
-                for k, v in value.items():
-                    output += f"  {k}: {v}\n"
-            else:
-                output += f"{value}\n"
-            output += "\n"
-        
-        self.output_text.append(output)
+        # Log results by category
+        for category, findings in results.items():
+            if isinstance(findings, dict) and findings.get('findings'):
+                # Log category header
+                self.update_log({
+                    'type': 'INFO',
+                    'source': category,
+                    'content': f'Found {len(findings["findings"])} issues'
+                })
+                
+                # Log individual findings
+                for finding in findings['findings']:
+                    self.update_log({
+                        'type': finding.get('severity', 'INFO'),
+                        'source': category,
+                        'content': finding.get('description', 'No description provided')
+                    })
         
         # Save to history
         scan_result = ScanResult(
@@ -717,17 +836,77 @@ class MainWindow(QMainWindow):
         self.refresh_history_view()
 
     def scan_error(self, error_msg):
+        """Enhanced error logging"""
         self.scan_button.setEnabled(True)
         self.status_label.setText("Error occurred")
-        self.output_text.append(f"\nError: {error_msg}")
+        self.update_log({
+            'type': 'ERROR',
+            'source': 'Scanner',
+            'content': error_msg
+        })
 
     def update_log(self, message):
-        """Handle detailed log messages"""
-        self.output_text.append(message)
+        """Enhanced logging with better formatting and assistant communications"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # Format based on message type
+        if isinstance(message, dict):
+            # Handle structured log messages
+            msg_type = message.get('type', 'INFO')
+            source = message.get('source', 'System')
+            content = message.get('content', '')
+            
+            formatted_msg = f"""<div style='margin: 2px 0;'>
+                <span style='color: #666666'>[{timestamp}]</span> 
+                <span style='color: {self._get_type_color(msg_type)}'>{msg_type}</span> 
+                <span style='color: #4EC9B0'>{source}</span>: 
+                <span style='color: #D4D4D4'>{html.escape(str(content))}</span>
+            </div>"""
+            
+        elif " -> " in message:  # Assistant communication
+            source, target = message.split(" -> ", 1)
+            formatted_msg = f"""<div style='margin: 2px 0; padding-left: 20px;'>
+                <span style='color: #666666'>[{timestamp}]</span> 
+                <span style='color: #4EC9B0'>{source}</span> 
+                <span style='color: #666666'>→</span> 
+                <span style='color: #4EC9B0'>{target}</span>
+            </div>"""
+            
+        else:  # Regular log message
+            formatted_msg = f"""<div style='margin: 2px 0;'>
+                <span style='color: #666666'>[{timestamp}]</span> 
+                <span style='color: #D4D4D4'>{html.escape(message)}</span>
+            </div>"""
+
+        self.output_text.insertHtml(formatted_msg)
+        
         # Auto-scroll to bottom
         scrollbar = self.output_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _get_type_color(self, msg_type):
+        """Get color for different message types"""
+        colors = {
+            'INFO': '#569CD6',      # Blue
+            'WARNING': '#CE9178',    # Orange
+            'ERROR': '#F44747',      # Red
+            'SUCCESS': '#608B4E',    # Green
+            'PROCESS': '#9CDCFE',    # Light Blue
+            'ALERT': '#D16969',      # Pink
+            'COMM': '#4EC9B0'        # Teal
+        }
+        return colors.get(msg_type.upper(), '#D4D4D4')  # Default to light gray
+
     def _handle_message(self, message: Message):
-        """Handle incoming messages from the message bus"""
-        self.communications_view.add_message(message)
+        """Handle incoming messages from the message bus - non-async version"""
+        try:
+            self.communications_view.add_message(message)
+        except Exception as e:
+            print(f"Error handling message: {e}")
+
+    def closeEvent(self, event):
+        """Handle application shutdown"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.shutdown_assistants())
+        event.accept()

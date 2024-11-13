@@ -47,6 +47,12 @@ ShadowScout AI is a cutting-edge security assessment platform that combines GPT-
 - Comprehensive scan reports
 - JSON-formatted results
 
+### 🖥️ Visualization & Communication
+- **Inter-Assistant Communication**: Real-time message bus for sharing insights
+- **Visual Reasoning**: Graphical representation of analysis steps
+- **Collaboration Requests**: Assistants collaborate to solve complex problems
+- **Strategy Visualization**: Dynamic visual updates of attack strategies
+
 ## Quick Start
 
 ### Prerequisites
@@ -147,3 +153,5 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file.
 - LangChain Framework
 - Playwright
 - Rich CLI
+- NetworkX
+- Matplotlib
